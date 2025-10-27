@@ -1,0 +1,13 @@
+{
+  "baseline_mae_val": 16.56783830769231,
+  "baseline_mape_val": 8.28493028052915,
+  "Ridge_val_mape": 10.19659247881884,
+  "Lasso_val_mape": 29.180447868715408,
+  "RandomForest_val_mape": 35.346795473059764,
+  "XGBoost_val_mape": 37.93957788282433,
+  "Ensemble_val_mape": 27.77360810065511,
+  "test_mae": 15.82433082399501,
+  "test_rmse": 20.62616915436778,
+  "test_r2": -0.1582515595734615,
+  "test_mape": 7.548024711096847
+}

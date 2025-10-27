@@ -1,0 +1,19 @@
+============================================================
+HogIntel Improved Price Model Training Report
+============================================================
+Training Date: 2025-10-07 23:44:54
+
+Selected Features (6):
+  - price_rolling_mean_3
+  - price_lag_1
+  - price_rolling_mean_6
+  - price_lag_3
+  - price_lag_6
+  - year
+
+Best Model: Ridge
+Validation MAPE: 10.20%
+Test MAPE: 7.55%
+Baseline MAPE: 8.28%
+
+Improvement over baseline: 8.89%

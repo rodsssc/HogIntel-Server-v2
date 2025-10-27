@@ -1,0 +1,23 @@
+# Don't commit these
+.env
+.env.local
+__pycache__/
+*.pyc
+logs/
+*.log
+
+# Don't commit models (too large!)
+models/yolo_model/*.pt
+models/weight_model/*.pt
+models/price_model/*.pkl
+
+data/
+logs/
+training/
+.env
+.env.local
+.env.*
+
+
+# Keep directory structure
+!models/*/.gitkeep
