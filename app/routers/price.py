@@ -91,7 +91,7 @@ async def predict_price(
             f"Scan {request.scan_id}: Price prediction - "
             f"₱{price_prediction.price_per_kg:.2f}/kg, "
             f"Total: ₱{total_value:.2f}, "
-            f"Model: {price_prediction.model_used}, "
+            f"Model: {price_prediction.model_name}, "
             f"Confidence: {price_prediction.confidence:.2%}, "
             f"Features: {len(price_prediction.features_used) if price_prediction.features_used else 0}"
         )
@@ -101,7 +101,7 @@ async def predict_price(
             "price_per_kg": price_prediction.price_per_kg,
             "total_value": total_value,
             "confidence": price_prediction.confidence,
-            "model_used": price_prediction.model_used,
+            "model_used": price_prediction.model_name,
             "market_conditions": price_prediction.market_conditions,
             "timestamp": datetime.now()
         }

@@ -1,4 +1,5 @@
 # app/models/price_model.py
+import os
 import joblib
 import json
 import pandas as pd
@@ -16,7 +17,7 @@ class PricePrediction:
     """Structure for price prediction results"""
     price_per_kg: float
     confidence: float
-    model_used: str
+    model_name: str  # Changed from model_used to avoid Pydantic warning
     features_used: Optional[List[str]] = None
     market_conditions: Optional[Dict[str, Any]] = None
     prediction_metadata: Optional[Dict[str, Any]] = None
@@ -28,56 +29,132 @@ class PricePredictor:
     """
     
     def __init__(self, 
-                 model_path: str = r'C:\Users\Acer\OneDrive\Desktop\HogIntel-Price&Weight-Estimation\models\improved_price_model\best_price_model.pkl',
-                 scaler_path: str = r'C:\Users\Acer\OneDrive\Desktop\HogIntel-Price&Weight-Estimation\models\improved_price_model\price_scaler.pkl',
-                 features_path: str = r'C:\Users\Acer\OneDrive\Desktop\HogIntel-Price&Weight-Estimation\models\improved_price_model\selected_features.json',
-                 metrics_path: str = r'C:\Users\Acer\OneDrive\Desktop\HogIntel-Price&Weight-Estimation\models\improved_price_model\model_metrics.json'):
+                 model_path: Optional[str] = None,
+                 scaler_path: Optional[str] = None,
+                 features_path: Optional[str] = None,
+                 metrics_path: Optional[str] = None):
         
+        # Use environment variables or fallback to container defaults
+        self.model_path = model_path or os.getenv(
+            'PRICE_MODEL_PATH', 
+            '/models/price_model/best_price_model.pkl'
+        )
+        self.scaler_path = scaler_path or os.getenv(
+            'PRICE_SCALER_PATH',
+            '/models/price_model/price_scaler.pkl'
+        )
+        self.features_path = features_path or os.getenv(
+            'PRICE_FEATURES_PATH',
+            '/models/price_model/selected_features.json'
+        )
+        self.metrics_path = metrics_path or os.getenv(
+            'PRICE_METRICS_PATH',
+            '/models/price_model/model_metrics.json'
+        )
+        
+        logger.info("=" * 60)
+        logger.info("Initializing PricePredictor")
+        logger.info("=" * 60)
+        logger.info(f"Model Path:    {self.model_path}")
+        logger.info(f"Scaler Path:   {self.scaler_path}")
+        logger.info(f"Features Path: {self.features_path}")
+        logger.info(f"Metrics Path:  {self.metrics_path}")
+        logger.info("-" * 60)
+        
+        # Initialize attributes
         self.model = None
         self.scaler = None
         self.selected_features = None
         self.model_metrics = None
         self.model_name = "ridge"
         self.fallback_available = True
+        self.model_loaded = False
         
         # Load main model
         try:
-            self.model = joblib.load(model_path)
-            logger.info(f"Ridge regression model loaded from {model_path}")
+            if not os.path.exists(self.model_path):
+                raise FileNotFoundError(f"Model file not found: {self.model_path}")
+            
+            self.model = joblib.load(self.model_path)
+            logger.info(f"✅ Ridge regression model loaded from {self.model_path}")
+            logger.info(f"   Model type: {type(self.model).__name__}")
             self.model_loaded = True
+            
+        except FileNotFoundError as e:
+            logger.error(f"❌ Model file not found: {e}")
+            self.model_loaded = False
         except Exception as e:
-            logger.error(f"Failed to load price model: {e}")
+            logger.error(f"❌ Failed to load price model: {e}")
+            logger.exception("Full traceback:")
             self.model_loaded = False
         
         # Load scaler
         try:
-            self.scaler = joblib.load(scaler_path)
-            logger.info(f"Scaler loaded from {scaler_path}")
+            if not os.path.exists(self.scaler_path):
+                raise FileNotFoundError(f"Scaler file not found: {self.scaler_path}")
+            
+            self.scaler = joblib.load(self.scaler_path)
+            logger.info(f"✅ Scaler loaded from {self.scaler_path}")
+            logger.info(f"   Scaler type: {type(self.scaler).__name__}")
+            
+        except FileNotFoundError as e:
+            logger.warning(f"⚠️  Scaler file not found: {e}")
+            logger.warning("   Predictions will work without scaling (may be less accurate)")
+            self.scaler = None
         except Exception as e:
-            logger.warning(f"Failed to load scaler: {e}")
+            logger.warning(f"⚠️  Failed to load scaler: {e}")
             self.scaler = None
         
         # Load selected features
         try:
-            with open(features_path, 'r') as f:
+            if not os.path.exists(self.features_path):
+                raise FileNotFoundError(f"Features file not found: {self.features_path}")
+            
+            with open(self.features_path, 'r') as f:
                 self.selected_features = json.load(f)
-            logger.info(f"Selected features loaded: {self.selected_features}")
+            logger.info(f"✅ Selected features loaded: {len(self.selected_features)} features")
+            logger.info(f"   Features: {', '.join(self.selected_features[:5])}...")
+            
+        except FileNotFoundError as e:
+            logger.warning(f"⚠️  Features file not found: {e}")
+            logger.warning("   Will use all available features")
+            self.selected_features = None
         except Exception as e:
-            logger.warning(f"Failed to load selected features: {e}")
+            logger.warning(f"⚠️  Failed to load selected features: {e}")
             self.selected_features = None
         
         # Load model metrics
         try:
-            with open(metrics_path, 'r') as f:
+            if not os.path.exists(self.metrics_path):
+                raise FileNotFoundError(f"Metrics file not found: {self.metrics_path}")
+            
+            with open(self.metrics_path, 'r') as f:
                 self.model_metrics = json.load(f)
-            logger.info(f"Model metrics loaded (Test MAPE: {self.model_metrics.get('test_mape', 'N/A')}%)")
-        except Exception as e:
-            logger.warning(f"Failed to load model metrics: {e}")
+            
+            test_mape = self.model_metrics.get('test_mape', 'N/A')
+            test_mae = self.model_metrics.get('test_mae', 'N/A')
+            logger.info(f"✅ Model metrics loaded")
+            logger.info(f"   Test MAPE: {test_mape}%")
+            logger.info(f"   Test MAE:  {test_mae}")
+            
+        except FileNotFoundError as e:
+            logger.warning(f"⚠️  Metrics file not found: {e}")
             self.model_metrics = None
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to load model metrics: {e}")
+            self.model_metrics = None
+        
+        logger.info("-" * 60)
+        logger.info(f"PricePredictor Status:")
+        logger.info(f"  Model Loaded:    {'✅ YES' if self.model_loaded else '❌ NO'}")
+        logger.info(f"  Scaler Loaded:   {'✅ YES' if self.scaler else '⚠️  NO'}")
+        logger.info(f"  Features Loaded: {'✅ YES' if self.selected_features else '⚠️  NO'}")
+        logger.info(f"  Metrics Loaded:  {'✅ YES' if self.model_metrics else '⚠️  NO'}")
+        logger.info("=" * 60)
         
         # Historical price data for feature engineering (will be updated from database)
         self.historical_prices = []
-        self.last_known_price = 180.0  # Default fallback
+        self.last_known_price = 180.0  # Default fallback price (PHP)
     
     def update_historical_prices(self, prices: List[Dict[str, Any]]):
         """
@@ -91,6 +168,7 @@ class PricePredictor:
             if self.historical_prices:
                 self.last_known_price = self.historical_prices[-1]['price']
             logger.info(f"Historical prices updated: {len(self.historical_prices)} records")
+            logger.info(f"   Last known price: PHP {self.last_known_price:.2f}/kg")
         except Exception as e:
             logger.error(f"Failed to update historical prices: {e}")
     
@@ -113,9 +191,9 @@ class PricePredictor:
         features = {}
         
         # Temporal features
-        features['year'] = current_date.year
-        features['month_num'] = current_date.month
-        features['quarter'] = (current_date.month - 1) // 3 + 1
+        features['year'] = float(current_date.year)
+        features['month_num'] = float(current_date.month)
+        features['quarter'] = float((current_date.month - 1) // 3 + 1)
         
         # Cyclical encoding
         features['month_sin'] = np.sin(2 * np.pi * current_date.month / 12)
@@ -123,37 +201,37 @@ class PricePredictor:
         
         # Price lag features (based on historical data)
         if len(self.historical_prices) >= 1:
-            features['price_lag_1'] = self.historical_prices[-1]['price']
+            features['price_lag_1'] = float(self.historical_prices[-1]['price'])
         else:
-            features['price_lag_1'] = self.last_known_price
+            features['price_lag_1'] = float(self.last_known_price)
         
         if len(self.historical_prices) >= 3:
-            features['price_lag_3'] = self.historical_prices[-3]['price']
+            features['price_lag_3'] = float(self.historical_prices[-3]['price'])
         else:
             features['price_lag_3'] = features['price_lag_1']
         
         if len(self.historical_prices) >= 6:
-            features['price_lag_6'] = self.historical_prices[-6]['price']
+            features['price_lag_6'] = float(self.historical_prices[-6]['price'])
         else:
             features['price_lag_6'] = features['price_lag_1']
         
         if len(self.historical_prices) >= 12:
-            features['price_lag_12'] = self.historical_prices[-12]['price']
+            features['price_lag_12'] = float(self.historical_prices[-12]['price'])
         else:
             features['price_lag_12'] = features['price_lag_1']
         
         # Rolling statistics
         if len(self.historical_prices) >= 3:
             recent_3 = [p['price'] for p in self.historical_prices[-3:]]
-            features['price_rolling_mean_3'] = np.mean(recent_3)
-            features['price_rolling_std_3'] = np.std(recent_3) if len(recent_3) > 1 else 0
+            features['price_rolling_mean_3'] = float(np.mean(recent_3))
+            features['price_rolling_std_3'] = float(np.std(recent_3)) if len(recent_3) > 1 else 0.0
         else:
             features['price_rolling_mean_3'] = features['price_lag_1']
-            features['price_rolling_std_3'] = 0
+            features['price_rolling_std_3'] = 0.0
         
         if len(self.historical_prices) >= 6:
             recent_6 = [p['price'] for p in self.historical_prices[-6:]]
-            features['price_rolling_mean_6'] = np.mean(recent_6)
+            features['price_rolling_mean_6'] = float(np.mean(recent_6))
         else:
             features['price_rolling_mean_6'] = features['price_rolling_mean_3']
         
@@ -161,25 +239,25 @@ class PricePredictor:
         if len(self.historical_prices) >= 2:
             price_current = self.historical_prices[-1]['price']
             price_prev_1 = self.historical_prices[-2]['price']
-            features['price_pct_change_1'] = (price_current - price_prev_1) / price_prev_1
+            features['price_pct_change_1'] = float((price_current - price_prev_1) / price_prev_1) if price_prev_1 != 0 else 0.0
         else:
-            features['price_pct_change_1'] = 0
+            features['price_pct_change_1'] = 0.0
         
         if len(self.historical_prices) >= 4:
             price_current = self.historical_prices[-1]['price']
             price_prev_3 = self.historical_prices[-4]['price']
-            features['price_pct_change_3'] = (price_current - price_prev_3) / price_prev_3
+            features['price_pct_change_3'] = float((price_current - price_prev_3) / price_prev_3) if price_prev_3 != 0 else 0.0
         else:
-            features['price_pct_change_3'] = 0
+            features['price_pct_change_3'] = 0.0
         
         if len(self.historical_prices) >= 13:
             price_current = self.historical_prices[-1]['price']
             price_prev_12 = self.historical_prices[-13]['price']
-            features['price_pct_change_12'] = (price_current - price_prev_12) / price_prev_12
-            features['price_yoy_change'] = price_current - price_prev_12
+            features['price_pct_change_12'] = float((price_current - price_prev_12) / price_prev_12) if price_prev_12 != 0 else 0.0
+            features['price_yoy_change'] = float(price_current - price_prev_12)
         else:
-            features['price_pct_change_12'] = 0
-            features['price_yoy_change'] = 0
+            features['price_pct_change_12'] = 0.0
+            features['price_yoy_change'] = 0.0
         
         return features
     
@@ -201,15 +279,17 @@ class PricePredictor:
             PricePrediction object with comprehensive prediction details
         """
         if not self.model_loaded or use_fallback or self.model is None:
+            logger.warning("⚠️  Using fallback price prediction")
             return self._fallback_price(weight_kg, market_data)
         
         try:
             # Engineer features
             features = self.engineer_features(weight_kg, current_date)
+            logger.debug(f"Engineered {len(features)} features")
             
             # Select only the features used by the model
             if self.selected_features:
-                feature_values = [features.get(feat, 0) for feat in self.selected_features]
+                feature_values = [features.get(feat, 0.0) for feat in self.selected_features]
                 feature_names = self.selected_features
             else:
                 feature_values = list(features.values())
@@ -217,32 +297,49 @@ class PricePredictor:
             
             # Create DataFrame
             df = pd.DataFrame([feature_values], columns=feature_names)
+            logger.debug(f"Created DataFrame with shape: {df.shape}")
             
             # Scale features
             if self.scaler:
-                df_scaled = self.scaler.transform(df)
+                # Convert to numpy array to avoid sklearn warning about feature names
+                df_scaled = self.scaler.transform(df.values)
+                logger.debug("Features scaled")
             else:
                 df_scaled = df.values
+                logger.debug("No scaling applied (scaler not loaded)")
             
             # Make prediction
-            price_per_kg = float(self.model.predict(df_scaled)[0])
+            prediction = self.model.predict(df_scaled)
+            
+            # Handle different prediction formats
+            if isinstance(prediction, np.ndarray):
+                price_per_kg = float(prediction[0])
+            else:
+                price_per_kg = float(prediction)
             
             # Apply reasonable bounds (PHP 120-250 per kg)
-            price_per_kg = np.clip(price_per_kg, 120.0, 250.0)
+            original_price = price_per_kg
+            price_per_kg = float(np.clip(price_per_kg, 120.0, 250.0))
+            
+            if abs(original_price - price_per_kg) > 0.01:
+                logger.debug(f"Price clipped from ₱{original_price:.2f} to ₱{price_per_kg:.2f}")
             
             # Calculate confidence based on model metrics
             if self.model_metrics:
                 test_mape = self.model_metrics.get('test_mape', 15.0)
-                confidence = max(0.5, min(0.95, 1.0 - (test_mape / 100)))
+                confidence = float(max(0.5, min(0.95, 1.0 - (test_mape / 100))))
             else:
                 confidence = 0.85
+            
+            logger.info(f"Price prediction: PHP {price_per_kg:.2f}/kg (confidence: {confidence:.2f})")
             
             # Prepare metadata
             metadata = {
                 'features_count': len(feature_names),
                 'scaler_used': self.scaler is not None,
                 'prediction_date': current_date.isoformat() if current_date else datetime.now().isoformat(),
-                'historical_data_points': len(self.historical_prices)
+                'historical_data_points': len(self.historical_prices),
+                'model_type': type(self.model).__name__
             }
             
             if self.model_metrics:
@@ -252,14 +349,16 @@ class PricePredictor:
             return PricePrediction(
                 price_per_kg=price_per_kg,
                 confidence=confidence,
-                model_used="ridge_regression",
+                model_name="ridge_regression",
                 features_used=feature_names,
                 market_conditions=self._get_market_conditions(weight_kg, market_data, features),
                 prediction_metadata=metadata
             )
             
         except Exception as e:
-            logger.error(f"Ridge regression prediction failed: {e}, falling back to simple model")
+            logger.error(f"❌ Ridge regression prediction failed: {e}")
+            logger.exception("Full traceback:")
+            logger.warning("⚠️  Falling back to simple price model")
             return self._fallback_price(weight_kg, market_data)
     
     def _fallback_price(self, 
@@ -285,15 +384,21 @@ class PricePredictor:
             elif trend == 'decreasing':
                 base_price *= 0.98
         
+        # Apply bounds
+        base_price = float(np.clip(base_price, 120.0, 250.0))
+        
+        logger.info(f"Fallback price: PHP {base_price:.2f}/kg")
+        
         return PricePrediction(
-            price_per_kg=float(base_price),
+            price_per_kg=base_price,
             confidence=0.70,
-            model_used="fallback",
+            model_name="fallback",
             features_used=None,
             market_conditions=self._get_market_conditions(weight_kg, market_data, {}),
             prediction_metadata={
                 'reason': 'Ridge model unavailable or forced fallback',
-                'base_price_source': 'last_known_price'
+                'base_price_source': 'last_known_price',
+                'last_known_price': self.last_known_price
             }
         )
     
@@ -388,9 +493,18 @@ class PricePredictor:
             "model_type": "ridge_regression",
             "model_loaded": self.model_loaded,
             "scaler_loaded": self.scaler is not None,
+            "features_loaded": self.selected_features is not None,
+            "metrics_loaded": self.model_metrics is not None,
             "selected_features": self.selected_features,
+            "feature_count": len(self.selected_features) if self.selected_features else 0,
             "metrics": self.model_metrics,
             "historical_data_points": len(self.historical_prices),
             "last_known_price": self.last_known_price,
-            "fallback_available": self.fallback_available
+            "fallback_available": self.fallback_available,
+            "paths": {
+                "model": self.model_path,
+                "scaler": self.scaler_path,
+                "features": self.features_path,
+                "metrics": self.metrics_path
+            }
         }
