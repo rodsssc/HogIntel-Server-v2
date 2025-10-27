@@ -1,2 +1,0 @@
-
-@app.get("/health")
