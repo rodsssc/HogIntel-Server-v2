@@ -1,0 +1,19 @@
+version: "3.9"
+
+services:
+  hogintel-api:
+    build:
+      context: ..        # Build from project root
+      dockerfile: docker/Dockerfile
+      args:
+        MODE: prod
+    container_name: hogintel-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../app:/app           # Mount app folder to /app
+      - ../models:/models     # Mount models folder to /models (root level)
+            # Mount data folder to /data (root level)
+    env_file:
+      - ../.env
+    restart: always
