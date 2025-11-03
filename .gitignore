@@ -6,10 +6,11 @@ __pycache__/
 logs/
 *.log
 
-# Don't commit models (too large!)
-models/yolo_model/*.pt
-models/weight_model/*.pt
-models/price_model/*.pkl
+# Don't commit model weights
+models/**/*.pt
+models/**/*.pkl
+models/**/*.onnx
+
 
 data/
 logs/
@@ -19,5 +20,4 @@ training/
 .env.*
 
 
-# Keep directory structure
-!models/*/.gitkeep
+models/**/*.pt
