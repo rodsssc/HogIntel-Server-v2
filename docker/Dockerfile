@@ -25,14 +25,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY app/ .
 
-# Copy models to root level
+# Copy models to root level - FIXED THIS LINE
 COPY models/ /models/
 
 # Create logs directory
 RUN mkdir -p /app/logs
-
-# Don't copy .env - use env_file in docker-compose instead
-# COPY .env /.env  # ❌ Remove this line
 
 EXPOSE 8000
 
