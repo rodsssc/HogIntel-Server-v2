@@ -9,8 +9,8 @@ pydantic-settings==2.1.0
 # ============================
 # 🤖 COMPUTER VISION & ML
 # ============================
-torch==2.5.1
-torchvision==0.20.1
+torch==2.1.2
+torchvision==0.16.2
 opencv-python-headless==4.9.0.80
 ultralytics==8.1.0
 numpy==1.26.3

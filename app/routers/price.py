@@ -12,17 +12,18 @@ logger = setup_logger(__name__)
 
 # Initialize price predictor
 try:
-    price_predictor = PricePredictor()
-    logger.info("Ridge Regression price prediction model loaded successfully")
+    # Pass db_connection if available (replace None with actual connection)
+    price_predictor = PricePredictor(db_connection=None)
+    logger.info("✅ Ridge Regression price prediction model initialized successfully")
 except Exception as e:
-    logger.error(f"Failed to load price model: {e}")
+    logger.error(f"❌ Failed to initialize price model: {e}")
     raise
 
 # Dependency to ensure predictor is loaded
 def get_price_predictor() -> PricePredictor:
     """Dependency to get price predictor instance"""
     if not price_predictor.model_loaded:
-        logger.warning("Ridge model not loaded, using fallback mode")
+        logger.warning("⚠️  Ridge model not loaded, using fallback mode")
     return price_predictor
 
 
@@ -70,11 +71,20 @@ async def predict_price(
     
     # Validate weight range (reasonable hog weights)
     if request.confirmed_weight < 20 or request.confirmed_weight > 200:
-        logger.warning(f"Unusual weight detected: {request.confirmed_weight} kg")
+        logger.warning(f"⚠️  Unusual weight detected: {request.confirmed_weight} kg")
+    
+    # Check if historical prices need updating
+    if len(predictor.historical_prices) == 0:
+        logger.warning("⚠️  No historical prices loaded! Predictions will be less accurate.")
+        logger.warning("⚠️  Call /api/v1/price/update-historical to improve accuracy.")
     
     try:
         # Predict price with optional date parameter
         prediction_date = getattr(request, 'prediction_date', None)
+        
+        logger.info(f"🔮 Starting price prediction for scan {request.scan_id}")
+        logger.info(f"   Weight: {request.confirmed_weight} kg")
+        logger.info(f"   Historical data points: {len(predictor.historical_prices)}")
         
         price_prediction = predictor.predict(
             weight_kg=request.confirmed_weight,
@@ -88,7 +98,7 @@ async def predict_price(
         
         # Log prediction details
         logger.info(
-            f"Scan {request.scan_id}: Price prediction - "
+            f"✅ Scan {request.scan_id}: Price prediction complete - "
             f"₱{price_prediction.price_per_kg:.2f}/kg, "
             f"Total: ₱{total_value:.2f}, "
             f"Model: {price_prediction.model_name}, "
@@ -116,7 +126,7 @@ async def predict_price(
         return PriceResponse(**response_data)
         
     except ValueError as e:
-        logger.error(f"Validation error for scan {request.scan_id}: {str(e)}")
+        logger.error(f"❌ Validation error for scan {request.scan_id}: {str(e)}")
         raise HTTPException(
             status_code=400,
             detail={
@@ -130,7 +140,7 @@ async def predict_price(
             }
         )
     except Exception as e:
-        logger.error(f"Price prediction failed for scan {request.scan_id}: {str(e)}", exc_info=True)
+        logger.error(f"❌ Price prediction failed for scan {request.scan_id}: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail={
@@ -171,7 +181,7 @@ async def get_available_models(predictor: PricePredictor = Depends(get_price_pre
             "status": "operational" if predictor.model_loaded else "fallback_only"
         }
     except Exception as e:
-        logger.error(f"Failed to get model info: {str(e)}")
+        logger.error(f"❌ Failed to get model info: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail={
@@ -207,7 +217,7 @@ async def get_model_info(predictor: PricePredictor = Depends(get_price_predictor
             "status": "healthy" if model_info["model_loaded"] else "degraded"
         }
     except Exception as e:
-        logger.error(f"Failed to get comprehensive model info: {str(e)}")
+        logger.error(f"❌ Failed to get comprehensive model info: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail={
@@ -239,6 +249,8 @@ async def update_historical_prices(
         {"date": "2024-02-01", "price": 178.5}
     ]
     ```
+    
+    **IMPORTANT**: Call this endpoint with real historical price data before making predictions!
     """
     try:
         # Validate input
@@ -296,7 +308,7 @@ async def update_historical_prices(
         # Update historical prices
         predictor.update_historical_prices(validated_prices)
         
-        logger.info(f"Historical prices updated: {len(validated_prices)} records")
+        logger.info(f"✅ Historical prices updated: {len(validated_prices)} records")
         
         return {
             "success": True,
@@ -306,13 +318,14 @@ async def update_historical_prices(
                 "end": validated_prices[-1]['date'].isoformat() if validated_prices else None
             },
             "last_known_price": predictor.last_known_price,
+            "message": "Historical prices updated successfully. Predictions will now be more accurate.",
             "timestamp": datetime.now()
         }
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update historical prices: {str(e)}", exc_info=True)
+        logger.error(f"❌ Failed to update historical prices: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail={
@@ -342,12 +355,16 @@ async def health_check(predictor: PricePredictor = Depends(get_price_predictor))
         model_info = predictor.get_model_info()
         
         # Determine health status
-        if model_info["model_loaded"] and model_info["scaler_loaded"]:
+        if model_info["model_loaded"] and model_info["scaler_loaded"] and model_info["historical_data_points"] > 0:
             status = "healthy"
             message = "All systems operational"
         elif model_info["model_loaded"]:
-            status = "degraded"
-            message = "Model loaded but scaler missing"
+            if model_info["historical_data_points"] == 0:
+                status = "degraded"
+                message = "Model loaded but no historical data. Call /price/update-historical"
+            else:
+                status = "degraded"
+                message = "Model loaded but scaler missing"
         else:
             status = "degraded"
             message = "Using fallback mode"
@@ -366,7 +383,7 @@ async def health_check(predictor: PricePredictor = Depends(get_price_predictor))
             "timestamp": datetime.now()
         }
     except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
+        logger.error(f"❌ Health check failed: {str(e)}")
         return {
             "status": "unhealthy",
             "message": "Service error",
@@ -436,11 +453,11 @@ async def batch_predict_price(
                 "price_per_kg": price_prediction.price_per_kg,
                 "total_value": total_value,
                 "confidence": price_prediction.confidence,
-                "model_used": price_prediction.model_used
+                "model_used": price_prediction.model_name
             })
             
         except Exception as e:
-            logger.error(f"Batch prediction failed for index {idx}: {str(e)}")
+            logger.error(f"❌ Batch prediction failed for index {idx}: {str(e)}")
             errors.append({
                 "index": idx,
                 "scan_id": request.scan_id,

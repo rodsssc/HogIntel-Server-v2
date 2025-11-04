@@ -17,7 +17,7 @@ class PricePrediction:
     """Structure for price prediction results"""
     price_per_kg: float
     confidence: float
-    model_name: str  # Changed from model_used to avoid Pydantic warning
+    model_name: str
     features_used: Optional[List[str]] = None
     market_conditions: Optional[Dict[str, Any]] = None
     prediction_metadata: Optional[Dict[str, Any]] = None
@@ -32,7 +32,8 @@ class PricePredictor:
                  model_path: Optional[str] = None,
                  scaler_path: Optional[str] = None,
                  features_path: Optional[str] = None,
-                 metrics_path: Optional[str] = None):
+                 metrics_path: Optional[str] = None,
+                 db_connection=None):
         
         # Use environment variables or fallback to container defaults
         self.model_path = model_path or os.getenv(
@@ -152,9 +153,67 @@ class PricePredictor:
         logger.info(f"  Metrics Loaded:  {'✅ YES' if self.model_metrics else '⚠️  NO'}")
         logger.info("=" * 60)
         
-        # Historical price data for feature engineering (will be updated from database)
+        # Historical price data for feature engineering
         self.historical_prices = []
         self.last_known_price = 180.0  # Default fallback price (PHP)
+        
+        # 🔧 AUTO-UPDATE: Try to fetch historical prices on initialization
+        try:
+            self.auto_update_historical_prices(db_connection)
+        except Exception as e:
+            logger.warning(f"Could not auto-update historical prices: {e}")
+            logger.warning("Using default fallback price. Call update_historical_prices() manually.")
+    
+    def auto_update_historical_prices(self, db_connection=None):
+        """
+        Automatically fetch and update historical prices from database
+        
+        Args:
+            db_connection: Database connection object (optional)
+        """
+        try:
+            if db_connection:
+                # Fetch from database
+                query = """
+                    SELECT date, avg_price as price 
+                    FROM historical_prices 
+                    WHERE date >= DATE_SUB(NOW(), INTERVAL 12 MONTH)
+                    ORDER BY date ASC
+                """
+                results = db_connection.execute(query)
+                prices = [
+                    {"date": row.date, "price": float(row.price)} 
+                    for row in results
+                ]
+                self.update_historical_prices(prices)
+                logger.info(f"✅ Auto-updated {len(prices)} historical price records from database")
+            else:
+                # Generate synthetic data for testing (REPLACE THIS IN PRODUCTION)
+                logger.warning("⚠️  No database connection - generating synthetic historical data")
+                logger.warning("⚠️  REPLACE THIS WITH ACTUAL DATABASE QUERIES IN PRODUCTION!")
+                
+                from datetime import timedelta
+                
+                # Generate 12 months of synthetic price data with realistic variation
+                base_price = 170.0
+                prices = []
+                current_date = datetime.now()
+                
+                for i in range(12):
+                    date = current_date - timedelta(days=30 * (12 - i))
+                    # Add seasonal variation and trend
+                    seasonal = 5 * np.sin(2 * np.pi * date.month / 12)
+                    trend = (i - 6) * 0.5  # Slight upward trend
+                    noise = np.random.uniform(-3, 3)
+                    price = base_price + seasonal + trend + noise
+                    prices.append({"date": date, "price": float(price)})
+                
+                self.update_historical_prices(prices)
+                logger.info(f"⚠️  Generated {len(prices)} synthetic price records for testing")
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to auto-update historical prices: {e}")
+            logger.warning("⚠️  Continuing with default last_known_price")
     
     def update_historical_prices(self, prices: List[Dict[str, Any]]):
         """
@@ -167,10 +226,11 @@ class PricePredictor:
             self.historical_prices = sorted(prices, key=lambda x: x['date'])
             if self.historical_prices:
                 self.last_known_price = self.historical_prices[-1]['price']
-            logger.info(f"Historical prices updated: {len(self.historical_prices)} records")
+            logger.info(f"📊 Historical prices updated: {len(self.historical_prices)} records")
             logger.info(f"   Last known price: PHP {self.last_known_price:.2f}/kg")
+            logger.info(f"   Date range: {self.historical_prices[0]['date'].strftime('%Y-%m-%d')} to {self.historical_prices[-1]['date'].strftime('%Y-%m-%d')}")
         except Exception as e:
-            logger.error(f"Failed to update historical prices: {e}")
+            logger.error(f"❌ Failed to update historical prices: {e}")
     
     def engineer_features(self, 
                          base_weight: Optional[float] = None,
@@ -285,28 +345,47 @@ class PricePredictor:
         try:
             # Engineer features
             features = self.engineer_features(weight_kg, current_date)
-            logger.debug(f"Engineered {len(features)} features")
+            
+            # 🔍 DEBUG: Log all feature values
+            logger.info("=" * 80)
+            logger.info("🔍 FEATURE VALUES FOR PREDICTION")
+            logger.info("=" * 80)
+            logger.info(f"   Prediction Date: {(current_date or datetime.now()).strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info(f"   Historical Data Points: {len(self.historical_prices)}")
+            logger.info("-" * 80)
+            
+            for feat_name, feat_value in features.items():
+                logger.info(f"   {feat_name:30s}: {feat_value:>12.4f}")
+            
+            logger.info("=" * 80)
             
             # Select only the features used by the model
             if self.selected_features:
                 feature_values = [features.get(feat, 0.0) for feat in self.selected_features]
                 feature_names = self.selected_features
+                
+                # 🔍 DEBUG: Log selected features being sent to model
+                logger.info("🎯 SELECTED FEATURES FOR MODEL:")
+                logger.info("-" * 80)
+                for fname, fval in zip(feature_names, feature_values):
+                    logger.info(f"   {fname:30s}: {fval:>12.4f}")
+                logger.info("=" * 80)
             else:
                 feature_values = list(features.values())
                 feature_names = list(features.keys())
+                logger.warning("⚠️  Using all features (selected_features not loaded)")
             
             # Create DataFrame
             df = pd.DataFrame([feature_values], columns=feature_names)
-            logger.debug(f"Created DataFrame with shape: {df.shape}")
+            logger.debug(f"📊 DataFrame shape: {df.shape}")
             
             # Scale features
             if self.scaler:
-                # Convert to numpy array to avoid sklearn warning about feature names
                 df_scaled = self.scaler.transform(df.values)
-                logger.debug("Features scaled")
+                logger.debug("✅ Features scaled")
             else:
                 df_scaled = df.values
-                logger.debug("No scaling applied (scaler not loaded)")
+                logger.warning("⚠️  No scaling applied (scaler not loaded)")
             
             # Make prediction
             prediction = self.model.predict(df_scaled)
@@ -322,7 +401,7 @@ class PricePredictor:
             price_per_kg = float(np.clip(price_per_kg, 120.0, 250.0))
             
             if abs(original_price - price_per_kg) > 0.01:
-                logger.debug(f"Price clipped from ₱{original_price:.2f} to ₱{price_per_kg:.2f}")
+                logger.warning(f"⚠️  Price clipped from ₱{original_price:.2f} to ₱{price_per_kg:.2f}")
             
             # Calculate confidence based on model metrics
             if self.model_metrics:
@@ -331,7 +410,11 @@ class PricePredictor:
             else:
                 confidence = 0.85
             
-            logger.info(f"Price prediction: PHP {price_per_kg:.2f}/kg (confidence: {confidence:.2f})")
+            logger.info("=" * 80)
+            logger.info(f"💰 PREDICTION RESULT: ₱{price_per_kg:.2f}/kg")
+            logger.info(f"📊 Confidence: {confidence:.2%}")
+            logger.info(f"🤖 Model: {type(self.model).__name__}")
+            logger.info("=" * 80)
             
             # Prepare metadata
             metadata = {
@@ -339,7 +422,9 @@ class PricePredictor:
                 'scaler_used': self.scaler is not None,
                 'prediction_date': current_date.isoformat() if current_date else datetime.now().isoformat(),
                 'historical_data_points': len(self.historical_prices),
-                'model_type': type(self.model).__name__
+                'model_type': type(self.model).__name__,
+                'original_prediction': original_price,
+                'clipped': abs(original_price - price_per_kg) > 0.01
             }
             
             if self.model_metrics:
@@ -387,7 +472,7 @@ class PricePredictor:
         # Apply bounds
         base_price = float(np.clip(base_price, 120.0, 250.0))
         
-        logger.info(f"Fallback price: PHP {base_price:.2f}/kg")
+        logger.info(f"💰 Fallback price: PHP {base_price:.2f}/kg")
         
         return PricePrediction(
             price_per_kg=base_price,
