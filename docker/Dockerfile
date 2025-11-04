@@ -10,12 +10,13 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies including wget/curl for downloading
 RUN apt-get update && apt-get install -y \
     build-essential \
     libgl1 \
     libglib2.0-0 \
     curl \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
@@ -25,18 +26,18 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY app/ .
 
-# Copy models to root level - FIXED THIS LINE
-COPY models/ /models/
+# Create directories
+RUN mkdir -p /app/logs /models
 
-# Create logs directory
-RUN mkdir -p /app/logs
+# Download models at build time (if publicly accessible)
+# Or mount them at runtime via volumes
+RUN echo "Models will be mounted via volume or downloaded at runtime"
 
 EXPOSE 8000
 
-# Run as non-root user for better security
+# Run as non-root user
 RUN useradd -m -u 1000 appuser && \
     chown -R appuser:appuser /app /models
 USER appuser
 
-# Use exec form for better signal handling
 CMD ["sh", "-c", "if [ \"$MODE\" = \"dev\" ]; then uvicorn main:app --host 0.0.0.0 --port 8000 --reload; else uvicorn main:app --host 0.0.0.0 --port 8000; fi"]

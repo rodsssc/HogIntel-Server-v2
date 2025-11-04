@@ -3,6 +3,8 @@ import os
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
+import urllib.request
+import shutil
 
 # ============================================================
 # Environment Detection & Configuration Loading
@@ -29,6 +31,140 @@ else:
 # Load the appropriate environment file
 load_dotenv(env_file, override=True)
 print(f"✅ Environment variables loaded from: {env_file}")
+
+# ============================================================
+# Model Download Utility
+# ============================================================
+def download_file(url: str, destination: str, description: str = "file") -> bool:
+    """
+    Download a file from URL to destination path
+    
+    Args:
+        url: Source URL
+        destination: Destination file path
+        description: Human-readable description for logging
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        print(f"📥 Downloading {description}...")
+        print(f"   URL: {url}")
+        print(f"   Destination: {destination}")
+        
+        # Create parent directory if it doesn't exist
+        Path(destination).parent.mkdir(parents=True, exist_ok=True)
+        
+        # Download with progress indication
+        def reporthook(count, block_size, total_size):
+            if total_size > 0:
+                percent = int(count * block_size * 100 / total_size)
+                if count % 50 == 0:  # Print every ~5MB for typical block sizes
+                    print(f"   Progress: {percent}%")
+        
+        urllib.request.urlretrieve(url, destination, reporthook=reporthook)
+        print(f"✅ Successfully downloaded {description}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Failed to download {description}: {e}")
+        return False
+
+def ensure_models_downloaded():
+    """
+    Download models from cloud storage if they don't exist locally
+    Reads model URLs from environment variables
+    """
+    print("\n" + "=" * 60)
+    print("🔍 Checking Model Files...")
+    print("=" * 60)
+    
+    # Define models to check/download
+    models_config = [
+        {
+            "env_path": "YOLO_MODEL_PATH",
+            "env_url": "YOLO_MODEL_URL",
+            "description": "YOLO Detection Model"
+        },
+        {
+            "env_path": "CNN_MODEL_PATH",
+            "env_url": "CNN_MODEL_URL",
+            "description": "CNN Weight Prediction Model"
+        },
+        {
+            "env_path": "PRICE_MODEL_PATH",
+            "env_url": "PRICE_MODEL_URL",
+            "description": "Price Prediction Model"
+        },
+        {
+            "env_path": "PRICE_SCALER_PATH",
+            "env_url": "PRICE_SCALER_URL",
+            "description": "Price Scaler"
+        },
+        {
+            "env_path": "PRICE_FEATURES_PATH",
+            "env_url": "PRICE_FEATURES_URL",
+            "description": "Price Features Config"
+        },
+        {
+            "env_path": "PRICE_METRICS_PATH",
+            "env_url": "PRICE_METRICS_URL",
+            "description": "Price Model Metrics"
+        }
+    ]
+    
+    all_models_ready = True
+    
+    for model in models_config:
+        local_path = os.getenv(model["env_path"])
+        model_url = os.getenv(model["env_url"])
+        
+        if not local_path:
+            print(f"⚠️  {model['description']}: Path not configured (skipping)")
+            continue
+        
+        # Check if file already exists
+        if os.path.exists(local_path):
+            file_size = os.path.getsize(local_path)
+            print(f"✅ {model['description']}: Found ({file_size:,} bytes)")
+            print(f"   Path: {local_path}")
+        else:
+            print(f"❌ {model['description']}: Not found locally")
+            
+            # Try to download if URL is provided
+            if model_url:
+                success = download_file(model_url, local_path, model['description'])
+                if not success:
+                    all_models_ready = False
+                    print(f"⚠️  WARNING: Failed to download {model['description']}")
+            else:
+                all_models_ready = False
+                print(f"⚠️  WARNING: No download URL configured for {model['description']}")
+                print(f"   Set {model['env_url']} in your .env file")
+    
+    print("=" * 60)
+    
+    if not all_models_ready:
+        print("⚠️  WARNING: Some models are missing!")
+        print("   The API will start but endpoints may fail.")
+        print("   Please configure model URLs in your .env file:")
+        print("   - YOLO_MODEL_URL")
+        print("   - CNN_MODEL_URL")
+        print("   - PRICE_MODEL_URL")
+        print("   - PRICE_SCALER_URL")
+        print("   - PRICE_FEATURES_URL")
+        print("   - PRICE_METRICS_URL")
+        print("=" * 60)
+    else:
+        print("✅ All models are ready!")
+        print("=" * 60)
+    
+    return all_models_ready
+
+# ============================================================
+# Download models BEFORE importing other modules
+# ============================================================
+models_ready = ensure_models_downloaded()
 
 # ============================================================
 # Now import everything else
@@ -66,6 +202,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"  YOLO: {settings.YOLO_MODEL_PATH}")
     logger.info(f"  CNN: {settings.CNN_MODEL_PATH}")
     logger.info(f"  Price: {settings.PRICE_MODEL_PATH}")
+    logger.info(f"  Models Ready: {models_ready}")
     logger.info("=" * 60)
     
     yield
@@ -114,9 +251,10 @@ async def root():
     return {
         "message": "HogIntel API Server",
         "version": "1.0.0",
-        "status": "healthy",
+        "status": "healthy" if models_ready else "degraded",
         "environment": settings.ENVIRONMENT,
         "running_in_docker": in_docker,
+        "models_ready": models_ready,
         "endpoints": {
             "docs": "/docs",
             "redoc": "/redoc",
@@ -135,15 +273,23 @@ async def health_check():
     model_status = {
         "yolo": {
             "path": settings.YOLO_MODEL_PATH,
-            "exists": os.path.exists(settings.YOLO_MODEL_PATH) if settings.YOLO_MODEL_PATH else False
+            "exists": os.path.exists(settings.YOLO_MODEL_PATH) if settings.YOLO_MODEL_PATH else False,
+            "size": os.path.getsize(settings.YOLO_MODEL_PATH) if settings.YOLO_MODEL_PATH and os.path.exists(settings.YOLO_MODEL_PATH) else 0
         },
         "cnn": {
             "path": settings.CNN_MODEL_PATH,
-            "exists": os.path.exists(settings.CNN_MODEL_PATH) if settings.CNN_MODEL_PATH else False
+            "exists": os.path.exists(settings.CNN_MODEL_PATH) if settings.CNN_MODEL_PATH else False,
+            "size": os.path.getsize(settings.CNN_MODEL_PATH) if settings.CNN_MODEL_PATH and os.path.exists(settings.CNN_MODEL_PATH) else 0
         },
         "price": {
             "path": settings.PRICE_MODEL_PATH,
-            "exists": os.path.exists(settings.PRICE_MODEL_PATH) if settings.PRICE_MODEL_PATH else False
+            "exists": os.path.exists(settings.PRICE_MODEL_PATH) if settings.PRICE_MODEL_PATH else False,
+            "size": os.path.getsize(settings.PRICE_MODEL_PATH) if settings.PRICE_MODEL_PATH and os.path.exists(settings.PRICE_MODEL_PATH) else 0
+        },
+        "price_scaler": {
+            "path": settings.PRICE_SCALER_PATH,
+            "exists": os.path.exists(settings.PRICE_SCALER_PATH) if settings.PRICE_SCALER_PATH else False,
+            "size": os.path.getsize(settings.PRICE_SCALER_PATH) if settings.PRICE_SCALER_PATH and os.path.exists(settings.PRICE_SCALER_PATH) else 0
         }
     }
     
@@ -157,7 +303,8 @@ async def health_check():
         "environment": settings.ENVIRONMENT,
         "running_in_docker": in_docker,
         "models": model_status,
-        "models_loaded": all_models_loaded
+        "models_loaded": all_models_loaded,
+        "models_ready": models_ready
     }
 
 @app.get("/api/v1/info")
@@ -168,7 +315,8 @@ async def api_info():
             "title": "HogIntel API",
             "version": "1.0.0",
             "environment": settings.ENVIRONMENT,
-            "debug_mode": settings.DEBUG
+            "debug_mode": settings.DEBUG,
+            "models_ready": models_ready
         },
         "server": {
             "host": settings.HOST,
@@ -178,7 +326,10 @@ async def api_info():
         "models": {
             "yolo_path": settings.YOLO_MODEL_PATH,
             "cnn_path": settings.CNN_MODEL_PATH,
-            "price_path": settings.PRICE_MODEL_PATH
+            "price_path": settings.PRICE_MODEL_PATH,
+            "price_scaler_path": settings.PRICE_SCALER_PATH,
+            "price_features_path": settings.PRICE_FEATURES_PATH,
+            "price_metrics_path": settings.PRICE_METRICS_PATH
         },
         "config": {
             "min_confidence": settings.MIN_CONFIDENCE,

@@ -1,5 +1,4 @@
-version: "3.9"
-
+# Remove the version line (it's obsolete)
 services:
   hogintel-api:
     build:
@@ -16,9 +15,10 @@ services:
     env_file:
       - ../.env
     volumes:
-      # Add volume for persistent logs
+      # Add volume for persistent logs only
       - hogintel-logs:/app/logs
-    restart: unless-stopped  # Better than 'always' for manual stops
+    
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
