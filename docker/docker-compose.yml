@@ -1,9 +1,8 @@
-# Remove the version line (it's obsolete)
 services:
   hogintel-api:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile
+      context: ..              # Parent directory (repo root)
+      dockerfile: docker/Dockerfile  # Path to Dockerfile from context
       args:
         MODE: prod
     container_name: hogintel-api
@@ -11,11 +10,10 @@ services:
       - "8000:8000"
     environment:
       - RUNNING_IN_DOCKER=1
-      - PYTHONPATH=/app
+      - PYTHONPATH=/app/app    # Match your Dockerfile
     env_file:
       - ../.env
     volumes:
-      # Add volume for persistent logs only
       - hogintel-logs:/app/logs
     
     restart: unless-stopped
