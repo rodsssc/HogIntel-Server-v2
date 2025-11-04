@@ -18,21 +18,18 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# ⚠️ FIXED: Copy from parent directory (context: ..)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# ⚠️ FIXED: Copy app from parent directory
 COPY app/ .
 
-# Copy models to root level
+# ⚠️ FIXED: Copy models from parent directory
 COPY models/ /models/
 
 # Create logs directory
 RUN mkdir -p /app/logs
-
-# Don't copy .env - use env_file in docker-compose instead
-# COPY .env /.env  # ❌ Remove this line
 
 EXPOSE 8000
 

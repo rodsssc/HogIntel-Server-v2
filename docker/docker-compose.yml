@@ -4,7 +4,7 @@ services:
   hogintel-api:
     build:
       context: ..
-      dockerfile: docker/Dockerfile
+      dockerfile: Dockerfile
       args:
         MODE: prod
     container_name: hogintel-api
