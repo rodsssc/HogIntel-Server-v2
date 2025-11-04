@@ -1,8 +1,8 @@
 services:
   hogintel-api:
     build:
-      context: ..              # Parent directory (repo root)
-      dockerfile: docker/Dockerfile  # Path to Dockerfile from context
+      context: .              # Current directory (hogintel/)
+      dockerfile: Dockerfile  # In same directory
       args:
         MODE: prod
     container_name: hogintel-api
@@ -10,9 +10,9 @@ services:
       - "8000:8000"
     environment:
       - RUNNING_IN_DOCKER=1
-      - PYTHONPATH=/app/app    # Match your Dockerfile
+      - PYTHONPATH=/app/app
     env_file:
-      - ../.env
+      - .env                  # In same directory
     volumes:
       - hogintel-logs:/app/logs
     
