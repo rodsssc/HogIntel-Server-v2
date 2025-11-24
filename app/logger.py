@@ -1,7 +1,4 @@
-"""
-HogIntel Logger
-Centralized logging configuration with UTF-8 support for Windows
-"""
+# logger.py
 import logging
 import os
 import sys
