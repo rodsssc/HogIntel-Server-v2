@@ -12,7 +12,7 @@ pydantic-settings==2.1.0
 torch==2.1.2
 torchvision==0.16.2
 opencv-python-headless==4.9.0.80
-ultralytics==8.1.0
+ultralytics>=8.0.200
 numpy==1.26.3
 pillow==10.2.0
 
@@ -22,7 +22,8 @@ pillow==10.2.0
 xgboost==2.0.3
 scikit-learn==1.4.0
 pandas==2.1.4
-prophet==1.1.5
+# Prophet often causes build issues - using compatible version with pre-built wheels
+prophet==1.1.5 --no-build-isolation
 
 # ============================
 # 🛠️ UTILITIES
@@ -32,6 +33,5 @@ python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 python-dotenv==1.0.0
 python-dateutil==2.8.2
-pytz==2023.3
+pytz==2024.1
 openpyxl==3.1.2
-
