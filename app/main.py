@@ -7,6 +7,8 @@ import urllib.request
 import shutil
 import time
 from typing import Dict, List, Optional
+import requests
+import re
 
 project_root = Path(__file__).parent.parent
 
@@ -34,16 +36,173 @@ print(f"✅ Environment variables loaded from: {env_file}")
 # Enhanced Model Download Utility
 # ============================================================
 class ModelDownloader:
-    """Enhanced model downloader with retry logic and progress tracking"""
+    """Enhanced model downloader with Google Drive large file support and retry logic"""
     
     def __init__(self):
         self.download_attempts = {}
         self.max_retries = 3
         self.retry_delay = 5  # seconds
+        self.chunk_size = 32768  # 32KB chunks
+    
+    def extract_file_id(self, url: str) -> Optional[str]:
+        """Extract Google Drive file ID from URL"""
+        patterns = [
+            r'id=([a-zA-Z0-9_-]+)',
+            r'/d/([a-zA-Z0-9_-]+)',
+            r'file/d/([a-zA-Z0-9_-]+)'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                return match.group(1)
+        return None
+    
+    def download_google_drive_file(self, file_id: str, destination: str, description: str = "file") -> bool:
+        """
+        Download file from Google Drive handling large file warnings
+        
+        Args:
+            file_id: Google Drive file ID
+            destination: Destination file path
+            description: Human-readable description for logging
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        print(f"📥 Downloading {description} from Google Drive...")
+        print(f"   File ID: {file_id}")
+        print(f"   Destination: {destination}")
+        
+        # Create parent directory if it doesn't exist
+        Path(destination).parent.mkdir(parents=True, exist_ok=True)
+        
+        # Start session
+        session = requests.Session()
+        
+        try:
+            # Method 1: Try direct download with confirmation bypass
+            print("   🔄 Attempting direct download with confirmation...")
+            url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
+            response = session.get(url, stream=True, timeout=30)
+            
+            # Check if we got actual file content or error page
+            # Read first few bytes to check
+            first_chunk = None
+            total_size = int(response.headers.get('content-length', 0))
+            
+            print(f"   📦 Response size: {total_size / (1024 * 1024):.1f} MB" if total_size > 0 else "   📦 Response size: Unknown")
+            
+            # If response is very small, it might be an error page
+            if total_size > 0 and total_size < 1024:
+                print("   ⚠️  Response too small, might be error page. Trying alternative method...")
+                response.close()
+                
+                # Method 2: Traditional method with token extraction
+                url = f"https://drive.google.com/uc?export=download&id={file_id}"
+                response = session.get(url, stream=True, timeout=30)
+                
+                # Get cookies and look for confirmation
+                confirm_token = None
+                for key, value in response.cookies.items():
+                    if key.startswith('download_warning'):
+                        confirm_token = value
+                        print(f"   ✓ Found confirmation cookie: {key}={value}")
+                        break
+                
+                if confirm_token:
+                    url = f"https://drive.google.com/uc?export=download&id={file_id}&confirm={confirm_token}"
+                    response = session.get(url, stream=True, timeout=30)
+                    total_size = int(response.headers.get('content-length', 0))
+                    print(f"   📦 File size after confirmation: {total_size / (1024 * 1024):.1f} MB")
+            
+            # Download the file with progress tracking
+            downloaded_size = 0
+            last_print_percent = -1
+            
+            with open(destination, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=self.chunk_size):
+                    if chunk:  # filter out keep-alive chunks
+                        f.write(chunk)
+                        downloaded_size += len(chunk)
+                        
+                        # Print progress
+                        if total_size > 0:
+                            percent = int(downloaded_size * 100 / total_size)
+                            if percent != last_print_percent and percent % 10 == 0:
+                                size_mb = downloaded_size / (1024 * 1024)
+                                total_mb = total_size / (1024 * 1024)
+                                print(f"   Progress: {percent}% ({size_mb:.1f}/{total_mb:.1f} MB)")
+                                last_print_percent = percent
+                        else:
+                            # Show progress without percentage
+                            if downloaded_size % (self.chunk_size * 500) == 0:  # Every ~16MB
+                                size_mb = downloaded_size / (1024 * 1024)
+                                print(f"   Downloaded: {size_mb:.1f} MB...")
+            
+            # Verify file was downloaded successfully
+            if os.path.exists(destination):
+                file_size = os.path.getsize(destination)
+                
+                # Check if file is too small (likely error page)
+                if file_size < 1024:  # Less than 1KB is suspicious
+                    print(f"⚠️  Downloaded file is suspiciously small ({file_size} bytes)")
+                    # Try to read and check content
+                    with open(destination, 'r', errors='ignore') as f:
+                        content_sample = f.read(500)
+                        if 'html' in content_sample.lower() or 'error' in content_sample.lower():
+                            print(f"❌ Downloaded content appears to be an error page")
+                            print(f"   Sample: {content_sample[:200]}")
+                            os.remove(destination)
+                            return False
+                
+                if file_size > 0:
+                    file_size_mb = file_size / (1024 * 1024)
+                    print(f"✅ Successfully downloaded {description} ({file_size_mb:.1f} MB)")
+                    return True
+                else:
+                    print(f"⚠️  Downloaded file is empty: {destination}")
+                    os.remove(destination)
+                    return False
+            else:
+                print(f"⚠️  Downloaded file not found: {destination}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Download failed: {e}")
+            import traceback
+            traceback.print_exc()
+            if os.path.exists(destination):
+                try:
+                    os.remove(destination)
+                except:
+                    pass
+            return False
+    
+    def _extract_confirm_token(self, html_content: str) -> Optional[str]:
+        """Extract confirmation token from Google Drive HTML"""
+        # Look for confirm parameter in various formats
+        patterns = [
+            r'confirm=([a-zA-Z0-9_-]+)',
+            r'download\?.*confirm=([a-zA-Z0-9_-]+)',
+            r'id=.*&confirm=([a-zA-Z0-9_-]+)',
+            r'"downloadUrl":"[^"]*confirm=([a-zA-Z0-9_-]+)',
+            r'href="[^"]*confirm=([a-zA-Z0-9_-]+)'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, html_content)
+            if match:
+                token = match.group(1)
+                # Filter out common false positives
+                if token not in ['t', 'true', 'false', '1', '0']:
+                    return token
+        
+        return None
     
     def download_file(self, url: str, destination: str, description: str = "file") -> bool:
         """
-        Download a file from URL to destination path with retry logic
+        Download a file from URL with automatic Google Drive handling
         
         Args:
             url: Source URL
@@ -59,40 +218,72 @@ class ModelDownloader:
         while self.download_attempts[url] < self.max_retries:
             try:
                 self.download_attempts[url] += 1
-                print(f"📥 Downloading {description} (attempt {self.download_attempts[url]}/{self.max_retries})...")
-                print(f"   URL: {url}")
-                print(f"   Destination: {destination}")
+                print(f"\n{'=' * 60}")
+                print(f"📥 Download Attempt {self.download_attempts[url]}/{self.max_retries}: {description}")
+                print(f"{'=' * 60}")
                 
-                # Create parent directory if it doesn't exist
-                Path(destination).parent.mkdir(parents=True, exist_ok=True)
+                # Check if this is a Google Drive URL
+                if 'drive.google.com' in url or 'drive.usercontent.google.com' in url:
+                    file_id = self.extract_file_id(url)
+                    if file_id:
+                        print(f"🔍 Detected Google Drive file (ID: {file_id})")
+                        success = self.download_google_drive_file(file_id, destination, description)
+                        if success:
+                            return True
+                    else:
+                        print(f"⚠️  Could not extract file ID from Google Drive URL")
+                        print(f"   URL: {url}")
+                        # Fall through to standard download
                 
-                # Download with progress indication
-                def reporthook(count, block_size, total_size):
-                    if total_size > 0:
-                        percent = int(count * block_size * 100 / total_size)
-                        if count % 50 == 0 or percent == 100:  # Print every ~5MB and at completion
-                            size_mb = (count * block_size) / (1024 * 1024)
-                            total_mb = total_size / (1024 * 1024)
-                            print(f"   Progress: {percent}% ({size_mb:.1f}/{total_mb:.1f} MB)")
-                
-                urllib.request.urlretrieve(url, destination, reporthook=reporthook)
-                
-                # Verify file was downloaded successfully
-                if os.path.exists(destination) and os.path.getsize(destination) > 0:
-                    file_size = os.path.getsize(destination) / (1024 * 1024)  # MB
-                    print(f"✅ Successfully downloaded {description} ({file_size:.1f} MB)")
-                    return True
-                else:
-                    print(f"⚠️  Downloaded file is empty or missing: {destination}")
-                    if os.path.exists(destination):
-                        os.remove(destination)  # Clean up corrupted file
+                # Standard download for non-Google Drive URLs or if extraction failed
+                if 'drive.google.com' not in url:
+                    print(f"📥 Standard download...")
+                    print(f"   URL: {url}")
+                    print(f"   Destination: {destination}")
+                    
+                    # Create parent directory
+                    Path(destination).parent.mkdir(parents=True, exist_ok=True)
+                    
+                    # Download with progress
+                    response = requests.get(url, stream=True, timeout=30)
+                    response.raise_for_status()
+                    
+                    total_size = int(response.headers.get('content-length', 0))
+                    downloaded_size = 0
+                    
+                    with open(destination, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=self.chunk_size):
+                            if chunk:
+                                f.write(chunk)
+                                downloaded_size += len(chunk)
+                                
+                                if total_size > 0 and downloaded_size % (self.chunk_size * 100) == 0:
+                                    percent = int(downloaded_size * 100 / total_size)
+                                    size_mb = downloaded_size / (1024 * 1024)
+                                    total_mb = total_size / (1024 * 1024)
+                                    print(f"   Progress: {percent}% ({size_mb:.1f}/{total_mb:.1f} MB)")
+                    
+                    # Verify
+                    if os.path.exists(destination) and os.path.getsize(destination) > 0:
+                        file_size = os.path.getsize(destination) / (1024 * 1024)
+                        print(f"✅ Successfully downloaded {description} ({file_size:.1f} MB)")
+                        return True
+                    else:
+                        print(f"⚠️  Downloaded file is empty or missing")
+                        if os.path.exists(destination):
+                            os.remove(destination)
                     
             except Exception as e:
                 print(f"❌ Download attempt {self.download_attempts[url]} failed: {e}")
+                import traceback
+                traceback.print_exc()
                 
                 # Clean up partially downloaded file
                 if os.path.exists(destination):
-                    os.remove(destination)
+                    try:
+                        os.remove(destination)
+                    except:
+                        pass
                 
                 # Wait before retry
                 if self.download_attempts[url] < self.max_retries:
