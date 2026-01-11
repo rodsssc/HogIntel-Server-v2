@@ -27,6 +27,7 @@ RUN pip install --no-cache-dir \
     pydantic==2.5.3 \
     pydantic-settings==2.1.0 && \
     pip install --no-cache-dir \
+    statsmodels==0.14.1 \
     numpy==1.26.3 \
     pillow==10.2.0 && \
     pip install --no-cache-dir \

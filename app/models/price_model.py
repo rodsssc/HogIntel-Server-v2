@@ -55,11 +55,11 @@ class PricePredictor:
         # Use environment variables or fallback to container defaults
         self.model_path = model_path or os.getenv(
             'PRICE_MODEL_PATH', 
-            'C:/Users/Acer/OneDrive/Desktop/HogIntel-Price&Weight-Estimation/models/enhanced_sarima_price_model/enhanced_sarima_model.pkl'
+            '/app/models/enhanced_sarima_price_model/enhanced_sarima_model.pkl'  # ← Docker path
         )
         self.metadata_path = metadata_path or os.getenv(
             'PRICE_METADATA_PATH',
-            'C:/Users/Acer/OneDrive/Desktop/HogIntel-Price&Weight-Estimation/models/enhanced_sarima_price_model/model_metadata.json'
+            '/app/models/enhanced_sarima_price_model/model_metadata.json'  # ← Docker path
         )
         
         logger.info("=" * 60)

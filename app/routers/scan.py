@@ -1,4 +1,4 @@
-# app/routers/scan.py - ENHANCED VERSION
+# app/routers/scan.py - COMPLETE FIXED VERSION
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException
 from typing import Optional
 import io
@@ -42,21 +42,7 @@ async def detect_hogs(
     """
     Stage 1a: Detect hogs in image using YOLO model.
     
-    This endpoint performs object detection to find all hogs in the provided image.
-    
-    **Process:**
-    1. Receives image file
-    2. Runs YOLO detection model
-    3. Returns bounding boxes for all detected hogs
-    
-    **Returns:**
-    - bounding_boxes: List of detected hog bounding boxes with x, y, width, height
-    - overall_confidence: Average confidence across all detections
-    - detection_id: Unique ID for this detection session
-    - total_detections: Number of hogs detected
-    - metadata: Additional information (image size, timestamp, model info)
-    
-    **Next Step:** Use the detection_id and select a bounding box to call /scan for weight estimation
+    ✅ FIXED: Simplified structure for Flutter compatibility
     """
     try:
         logger.info("=" * 60)
@@ -135,28 +121,41 @@ async def detect_hogs(
         
         # Run YOLO detection
         logger.info("🤖 Running YOLO detection...")
-        detections = detector.detect(
+        raw_detections = detector.detect(
             img_array,
             conf_threshold=confidence_threshold,
             iou_threshold=iou_threshold,
             max_det=max_detections
         )
         
+        # ✅ FIX: Simplified structure - bounding_box fields at root level
+        detections = []
+        for i, det in enumerate(raw_detections):
+            # Flatten structure - no nested bounding_box object
+            detection = {
+                "detection_id": f"det_{uuid.uuid4().hex[:8]}",
+                "x": float(det['x']),
+                "y": float(det['y']),
+                "width": float(det['width']),
+                "height": float(det['height']),
+                "confidence": float(det['confidence']),
+                "class_label": det.get('class_name', 'hog'),
+                "class_id": det.get('class_id', 0)
+            }
+            detections.append(detection)
+            
+            logger.info(
+                f"   Detection {i+1}: "
+                f"x={det['x']:.1f}, y={det['y']:.1f}, "
+                f"w={det['width']:.1f}, h={det['height']:.1f}, "
+                f"confidence={det['confidence']:.2%}"
+            )
+        
         # Log detection results
         logger.info(f"✅ YOLO detection complete - {len(detections)} hog(s) detected")
         
         if len(detections) == 0:
             logger.warning("⚠️  No hogs detected in image")
-        else:
-            # Log each detection with details
-            for i, det in enumerate(detections):
-                logger.info(
-                    f"   Detection {i+1}: "
-                    f"x={det['x']:.1f}, y={det['y']:.1f}, "
-                    f"w={det['width']:.1f}, h={det['height']:.1f}, "
-                    f"confidence={det['confidence']:.2%}, "
-                    f"class={det['class_name']}"
-                )
         
         # Calculate overall confidence
         overall_confidence = (
@@ -166,14 +165,17 @@ async def detect_hogs(
         
         detection_id = generate_detection_id()
         
-        # Prepare response
         response = {
-            "bounding_boxes": detections,
+            "detections": detections,
             "overall_confidence": round(overall_confidence, 4),
             "detection_id": detection_id,
+            "image_id": detection_id,
             "total_detections": len(detections),
+            "processing_time": 0.0,
             "metadata": {
                 "image_size": list(img.size),
+                "original_width": img.size[0],
+                "original_height": img.size[1],
                 "timestamp": datetime.now().isoformat(),
                 "model_type": "YOLOv8",
                 "model_path": detector.model_path,
@@ -185,6 +187,7 @@ async def detect_hogs(
         
         logger.info(f"📦 Returning detection result: {detection_id}")
         logger.info(f"   Overall confidence: {overall_confidence:.2%}")
+        logger.info(f"   Image size: {img.size[0]}x{img.size[1]}")
         logger.info("=" * 60)
         
         return response
@@ -205,40 +208,25 @@ async def detect_hogs(
 
 @router.post(
     "/scan",
-    summary="Stage 1b: Estimate weight for detected hog",
+    summary="Stage 1b: Estimate weight for detected hog with optional age support",
     description="Predict weight from detected hog using CNN regressor model"
 )
 async def scan_image(
     image: UploadFile = File(..., description="Image file to analyze"),
     selected_hog_id: Optional[str] = Form(None, description="Detection ID from previous /detect call"),
-    bbox: Optional[str] = Form(None, description="JSON string of bounding box coordinates {x, y, width, height}")
+    bbox: Optional[str] = Form(None, description="JSON string of bounding box coordinates {x, y, width, height}"),
+    age_months: Optional[float] = Form(None, description="Age of hog in months (optional)")
 ):
     """
-    Stage 1b: Predict weight from detected hog.
-    
-    This endpoint should be called after /detect to estimate the weight
-    of a specific detected hog using its bounding box coordinates.
-    
-    **Process:**
-    1. Receives image and bounding box from detection
-    2. Crops/processes the region of interest
-    3. Runs CNN weight estimation model
-    4. Returns estimated weight with confidence
-    
-    **Returns:**
-    - estimated_weight: Predicted weight in kg
-    - confidence: Confidence score of the prediction (0.0-1.0)
-    - detection_id: Unique ID for tracking (or scan_id)
-    - unit: Weight unit (kg)
-    - metadata: Additional information
-    
-    **Next Step:** Call /confirm to confirm the weight and proceed to price prediction
+    Stage 1b: Predict weight from detected hog with optional age support.
     """
     try:
         logger.info("=" * 60)
         logger.info("⚖️  STAGE 1b: WEIGHT ESTIMATION STARTED")
         if selected_hog_id:
             logger.info(f"   Detection ID: {selected_hog_id}")
+        if age_months is not None:
+            logger.info(f"   Age provided: {age_months} months")
         
         # Read and validate image
         try:
@@ -279,12 +267,6 @@ async def scan_image(
                 # Validate bbox coordinates
                 if any(k not in bbox_dict for k in ['x', 'y', 'width', 'height']):
                     raise ValueError("Bounding box must contain x, y, width, and height")
-                
-                # Check if bbox is within image bounds
-                if (bbox_dict['x'] < 0 or bbox_dict['y'] < 0 or
-                    bbox_dict['x'] + bbox_dict['width'] > img.size[0] or
-                    bbox_dict['y'] + bbox_dict['height'] > img.size[1]):
-                    logger.warning("⚠️  Bounding box extends outside image bounds")
                     
             except json.JSONDecodeError as e:
                 logger.error(f"❌ Invalid bbox JSON: {e}")
@@ -293,17 +275,7 @@ async def scan_image(
                     detail={
                         "error": "Invalid bounding box format",
                         "code": "INVALID_BBOX",
-                        "message": "Bounding box must be valid JSON with x, y, width, height fields"
-                    }
-                )
-            except ValueError as e:
-                logger.error(f"❌ Invalid bbox data: {e}")
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "Invalid bounding box data",
-                        "code": "INVALID_BBOX_DATA",
-                        "message": str(e)
+                        "message": "Bounding box must be valid JSON"
                     }
                 )
         else:
@@ -317,13 +289,17 @@ async def scan_image(
                 detail={
                     "error": "Weight estimation service unavailable",
                     "code": "MODEL_NOT_LOADED",
-                    "message": "CNN weight model failed to load. Please check server logs."
+                    "message": "CNN weight model failed to load."
                 }
             )
         
         # Predict weight
         logger.info("🤖 Running CNN weight estimation...")
-        weight, confidence = weight_estimator.predict_weight(img_array, bbox_dict)
+        weight, confidence, pred_metadata = weight_estimator.predict_weight(
+            img_array, 
+            bbox_dict,
+            age_months=age_months
+        )
         
         # Validate weight result
         if weight <= 0:
@@ -331,23 +307,42 @@ async def scan_image(
             weight = 0.0
             confidence = 0.0
         
+        # Determine prediction method
+        prediction_method = "image_only_cnn"
+        if pred_metadata.get("model_type") == "multimodal":
+            prediction_method = "multimodal_cnn"
+        
         logger.info(f"✅ Weight estimation complete: {weight:.2f} kg (confidence: {confidence:.2%})")
+        logger.info(f"   Method: {prediction_method}")
         
         scan_id = selected_hog_id or generate_scan_id()
         
         # Prepare response
         response = {
             "estimated_weight": round(weight, 2),
+            "weight_kg": round(weight, 2),
             "confidence": round(confidence, 4),
-            "scan_id": scan_id,  # Use scan_id for consistency with SARIMA
-            "detection_id": scan_id,  # Keep for backward compatibility
+            "scan_id": scan_id,
+            "detection_id": scan_id,
             "unit": "kg",
+            "age_provided": age_months is not None,
+            "age_months": age_months,
+            "prediction_method": prediction_method,
+            "roi_cropped": bbox_dict is not None,
+            "processing_time": 0.0,
+            "model_used": "CNN_Regressor",
+            "detection_bbox": [
+                bbox_dict.get('x', 0),
+                bbox_dict.get('y', 0),
+                bbox_dict.get('width', 0),
+                bbox_dict.get('height', 0)
+            ] if bbox_dict else [],
             "metadata": {
                 "image_size": list(img.size),
                 "timestamp": datetime.now().isoformat(),
                 "bbox_used": bbox_dict is not None,
-                "model_type": "CNN_Regressor",
-                "roi_cropped": bbox_dict is not None
+                "model_type": pred_metadata.get("model_type", "image_only"),
+                **pred_metadata
             }
         }
         
@@ -365,7 +360,7 @@ async def scan_image(
             detail={
                 "error": "Weight estimation failed",
                 "code": "SCAN_ERROR",
-                "message": f"An unexpected error occurred during weight estimation: {str(e)}"
+                "message": f"An unexpected error occurred: {str(e)}"
             }
         )
 
@@ -373,21 +368,16 @@ async def scan_image(
 @router.get(
     "/models/status",
     summary="Check detection models status",
-    description="Get status and information about YOLO and CNN weight estimation models"
+    description="Get status and information about models"
 )
 async def get_models_status():
-    """
-    Check if detection models are loaded and operational.
-    
-    **Returns:**
-    - yolo_model: Status and info about YOLO detection model
-    - weight_model: Status and info about CNN weight estimation model
-    - overall_status: Overall system health status
-    """
+    """Check if detection models are loaded and operational."""
     yolo_status = "operational" if detector.model_loaded else "unavailable"
     weight_status = "operational" if weight_estimator.model_loaded else "unavailable"
     
     overall_status = "healthy" if (detector.model_loaded and weight_estimator.model_loaded) else "degraded"
+    
+    weight_model_info = weight_estimator.get_model_info()
     
     response = {
         "yolo_model": {
@@ -399,14 +389,15 @@ async def get_models_status():
         },
         "weight_model": {
             "loaded": weight_estimator.model_loaded,
-            "model_path": getattr(weight_estimator, 'model_path', None),
+            "model_path": weight_model_info.get("model_path"),
             "model_type": "CNN_Regressor",
+            "is_multimodal": weight_model_info.get("is_multimodal", False),
             "status": weight_status
         },
         "overall_status": overall_status,
         "timestamp": datetime.now().isoformat()
     }
     
-    logger.info(f"📊 Models status check: YOLO={yolo_status}, Weight={weight_status}, Overall={overall_status}")
+    logger.info(f"📊 Models status: YOLO={yolo_status}, Weight={weight_status}")
     
-    return response
+    return response 
